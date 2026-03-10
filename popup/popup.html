@@ -2,15 +2,50 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Playback Pilot</title>
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
-  <!-- Issue #5: 팝업 UI 구현 예정 -->
-  <div id="app">
-    <p>Playback Pilot</p>
+
+  <div class="pp-header">
+    <span class="pp-title">Playback Pilot</span>
+    <span class="pp-subtitle" id="pp-site-label"></span>
   </div>
+
+  <!-- 동영상이 없는 페이지일 때 표시 -->
+  <div class="pp-empty" id="pp-empty">
+    현재 탭에 동영상이 없습니다.
+  </div>
+
+  <!-- 동영상이 있는 페이지일 때 표시 -->
+  <div class="pp-content" id="pp-content">
+
+    <div class="pp-speed-row">
+      <button class="pp-btn" id="pp-btn-minus" title="배속 감소 (−0.1)">−</button>
+      <div class="pp-speed-display">
+        <input
+          class="pp-speed-input"
+          id="pp-speed-input"
+          type="number"
+          min="0.5"
+          max="16"
+          step="0.1"
+          value="1.0"
+        />
+        <span class="pp-unit">x</span>
+      </div>
+      <button class="pp-btn" id="pp-btn-plus" title="배속 증가 (+0.1)">+</button>
+    </div>
+
+    <div class="pp-presets">
+      <button class="pp-preset-btn" data-speed="1.0">1.0x</button>
+      <button class="pp-preset-btn" data-speed="1.5">1.5x</button>
+      <button class="pp-preset-btn" data-speed="2.0">2.0x</button>
+      <button class="pp-preset-btn" data-speed="3.0">3.0x</button>
+    </div>
+
+  </div>
+
   <script src="popup.js"></script>
 </body>
 </html>
