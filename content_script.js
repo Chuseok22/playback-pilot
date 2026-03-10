@@ -3,8 +3,8 @@
 
   const MIN_SPEED = 0.5;
   const MAX_SPEED = 16.0;
-  const STORAGE_KEY_PREFIX = 'speed_';
   const OVERLAY_MARGIN = 8; // 동영상 우상단 모서리로부터의 여백(px)
+  // SpeedStorage는 storage.js에서 제공 (content_scripts에서 먼저 로드됨)
 
   // ── 1. injected.js를 page context에 삽입 ─────────────────────────────────
   function injectScript() {
@@ -35,36 +35,19 @@
   function setSpeed(rawValue) {
     const speed = clampSpeed(rawValue);
     sendSpeedToPageContext(speed);
-    saveSpeedForCurrentSite(speed);
+    SpeedStorage.save(speed);
     updateAllOverlays(speed);
     return speed;
   }
 
   function getSpeed() {
-    return loadSpeedForCurrentSite();
+    return SpeedStorage.load();
   }
 
-  // ── 5. 사이트별 배속 저장/불러오기 ──────────────────────────────────────
-  function getSiteKey() {
-    return STORAGE_KEY_PREFIX + location.hostname;
-  }
-
-  function saveSpeedForCurrentSite(speed) {
-    chrome.storage.sync.set({ [getSiteKey()]: speed });
-  }
-
-  function loadSpeedForCurrentSite() {
-    return new Promise((resolve) => {
-      chrome.storage.sync.get(getSiteKey(), (result) => {
-        resolve(result[getSiteKey()] ?? 1.0);
-      });
-    });
-  }
-
-  // ── 6. 페이지 로드 시 저장된 배속 복원 ───────────────────────────────────
+  // ── 5. 페이지 로드 시 저장된 배속 복원 (SpeedStorage 사용) ──────────────
   window.addEventListener('load', () => {
-    loadSpeedForCurrentSite().then((savedSpeed) => {
-      if (savedSpeed !== 1.0) {
+    SpeedStorage.load().then((savedSpeed) => {
+      if (savedSpeed !== SpeedStorage.DEFAULT_SPEED) {
         sendSpeedToPageContext(savedSpeed);
         updateAllOverlays(savedSpeed);
       }
@@ -206,8 +189,8 @@
     if (processedVideos.has(video)) return;
     processedVideos.add(video);
 
-    loadSpeedForCurrentSite().then((savedSpeed) => {
-      if (savedSpeed !== 1.0) {
+    SpeedStorage.load().then((savedSpeed) => {
+      if (savedSpeed !== SpeedStorage.DEFAULT_SPEED) {
         sendSpeedToPageContext(savedSpeed);
       }
 
