@@ -3,6 +3,7 @@
   "name": "Playback Pilot",
   "version": "1.0.0",
   "description": "모든 동영상 플레이어에서 0.5x~16x 배속을 자유롭게 조절하세요.",
+  "homepage_url": "https://github.com/Chuseok22/playback-pilot",
 
   "permissions": [
     "scripting",
