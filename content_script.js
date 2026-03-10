@@ -152,9 +152,17 @@
     const onScroll = () => positionOverlay(video, overlay);
     window.addEventListener('scroll', onScroll, { passive: true });
 
-    // 전체화면 전환 시 재배치
+    // 전체화면 전환 시 오버레이를 fullscreen element 안으로 이동
+    // position:fixed 요소는 fullscreen element 외부에서 보이지 않음
     document.addEventListener('fullscreenchange', () => {
-      // 전체화면 진입/종료 후 레이아웃이 안정되면 재계산
+      const fsElement = document.fullscreenElement;
+      if (fsElement) {
+        // 전체화면 진입: 오버레이를 fullscreen element 안으로 이동
+        fsElement.appendChild(overlay);
+      } else {
+        // 전체화면 종료: document.body로 복귀
+        document.body.appendChild(overlay);
+      }
       setTimeout(() => positionOverlay(video, overlay), 150);
     });
 
@@ -236,10 +244,7 @@
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === 'SET_SPEED') {
       const applied = setSpeed(message.speed);
-      document.querySelectorAll('video').forEach((video) => {
-        processedVideos.delete(video);
-        applySpeedToVideo(video);
-      });
+      // setSpeed()가 sendSpeedToPageContext + updateAllOverlays를 처리하므로 추가 호출 불필요
       sendResponse({ success: true, speed: applied });
     }
 
