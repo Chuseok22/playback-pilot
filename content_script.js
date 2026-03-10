@@ -76,10 +76,64 @@
     });
   });
 
-  // ── 7. popup / overlay에서 오는 메시지 수신 ──────────────────────────────
+  // ── 7. MutationObserver — 동적 video 요소 감지 ───────────────────────────
+  // YouTube, Netflix 등 SPA는 페이지 이동 시 video 요소를 동적으로 추가/교체
+  // MutationObserver로 DOM 변화를 감시하여 새 video에 자동으로 배속 적용
+
+  // 이미 처리한 video 요소를 추적하여 중복 적용 방지
+  const processedVideos = new WeakSet();
+
+  function applySpeedToVideo(video) {
+    if (processedVideos.has(video)) return;
+    processedVideos.add(video);
+
+    // 저장된 배속을 불러와 해당 video에 즉시 적용
+    loadSpeedForCurrentSite().then((savedSpeed) => {
+      if (savedSpeed !== 1.0) {
+        sendSpeedToPageContext(savedSpeed);
+      }
+    });
+  }
+
+  // 노드 및 하위 트리에서 video 요소를 찾아 처리
+  function findAndApplyToVideos(root) {
+    if (root.nodeName === 'VIDEO') {
+      applySpeedToVideo(root);
+    }
+    root.querySelectorAll?.('video').forEach(applySpeedToVideo);
+  }
+
+  const videoObserver = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      for (const node of mutation.addedNodes) {
+        if (node.nodeType !== Node.ELEMENT_NODE) continue;
+        findAndApplyToVideos(node);
+      }
+    }
+  });
+
+  videoObserver.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+  });
+
+  // 페이지 언로드 시 Observer 정리 (메모리 누수 방지)
+  window.addEventListener('unload', () => {
+    videoObserver.disconnect();
+  });
+
+  // 이미 존재하는 video 요소에 즉시 적용 (Observer 등록 이전에 렌더링된 video 커버)
+  document.querySelectorAll('video').forEach(applySpeedToVideo);
+
+  // ── 8. popup / overlay에서 오는 메시지 수신 ──────────────────────────────
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === 'SET_SPEED') {
       const applied = setSpeed(message.speed);
+      // 새로 감지된 video 포함 전체 재적용을 위해 processedVideos 초기화
+      document.querySelectorAll('video').forEach((video) => {
+        processedVideos.delete(video);
+        applySpeedToVideo(video);
+      });
       sendResponse({ success: true, speed: applied });
     }
 
