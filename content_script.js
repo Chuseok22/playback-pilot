@@ -4,14 +4,13 @@
   const MIN_SPEED = 0.5;
   const MAX_SPEED = 16.0;
   const STORAGE_KEY_PREFIX = 'speed_';
+  const OVERLAY_MARGIN = 8; // 동영상 우상단 모서리로부터의 여백(px)
 
   // ── 1. injected.js를 page context에 삽입 ─────────────────────────────────
-  // content_script는 isolated world → prototype override 불가
-  // <script> 태그로 직접 삽입하면 페이지 JS와 동일한 realm에서 실행됨
   function injectScript() {
     const script = document.createElement('script');
     script.src = chrome.runtime.getURL('injected.js');
-    script.onload = () => script.remove(); // 로드 후 DOM에서 제거
+    script.onload = () => script.remove();
     (document.head || document.documentElement).appendChild(script);
   }
 
@@ -21,13 +20,11 @@
   function clampSpeed(value) {
     const num = parseFloat(value);
     if (isNaN(num)) return 1.0;
-    // 0.1 단위로 반올림 후 범위 클램핑
     const rounded = Math.round(num * 10) / 10;
     return Math.min(MAX_SPEED, Math.max(MIN_SPEED, rounded));
   }
 
   // ── 3. injected.js(page context)로 배속 명령 전달 ────────────────────────
-  // isolated world → page context 직접 접근 불가이므로 CustomEvent 사용
   function sendSpeedToPageContext(speed) {
     window.dispatchEvent(
       new CustomEvent('__playbackPilot_setSpeed', { detail: { speed } })
@@ -39,17 +36,15 @@
     const speed = clampSpeed(rawValue);
     sendSpeedToPageContext(speed);
     saveSpeedForCurrentSite(speed);
+    updateAllOverlays(speed);
     return speed;
   }
 
   function getSpeed() {
-    // injected.js가 window.__playbackPilot 를 노출해두었지만
-    // isolated world에서는 page context의 window에 직접 접근 불가
-    // → storage에 저장된 값을 정보 소스로 사용
     return loadSpeedForCurrentSite();
   }
 
-  // ── 5. 사이트별 배속 저장/불러오기 (Issue #6에서 storage 로직 이관 예정) ──
+  // ── 5. 사이트별 배속 저장/불러오기 ──────────────────────────────────────
   function getSiteKey() {
     return STORAGE_KEY_PREFIX + location.hostname;
   }
@@ -67,35 +62,165 @@
   }
 
   // ── 6. 페이지 로드 시 저장된 배속 복원 ───────────────────────────────────
-  // injected.js가 로드된 직후 적용되어야 하므로 약간의 딜레이 후 실행
   window.addEventListener('load', () => {
     loadSpeedForCurrentSite().then((savedSpeed) => {
       if (savedSpeed !== 1.0) {
         sendSpeedToPageContext(savedSpeed);
+        updateAllOverlays(savedSpeed);
       }
     });
   });
 
-  // ── 7. MutationObserver — 동적 video 요소 감지 ───────────────────────────
-  // YouTube, Netflix 등 SPA는 페이지 이동 시 video 요소를 동적으로 추가/교체
-  // MutationObserver로 DOM 변화를 감시하여 새 video에 자동으로 배속 적용
+  // ── 7. 플로팅 오버레이 UI ────────────────────────────────────────────────
+  // video 요소마다 하나의 오버레이를 생성하고 WeakMap으로 연결
+  const videoOverlayMap = new WeakMap();
 
-  // 이미 처리한 video 요소를 추적하여 중복 적용 방지
+  function createOverlay(video) {
+    const overlay = document.createElement('div');
+    overlay.className = 'pp-overlay';
+    overlay.setAttribute('data-pp-overlay', '');
+
+    const btnMinus = document.createElement('button');
+    btnMinus.className = 'pp-btn pp-btn-minus';
+    btnMinus.textContent = '−';
+    btnMinus.title = '배속 감소 (−0.1)';
+
+    const input = document.createElement('input');
+    input.className = 'pp-speed-input';
+    input.type = 'number';
+    input.min = String(MIN_SPEED);
+    input.max = String(MAX_SPEED);
+    input.step = '0.1';
+    input.value = '1.0';
+
+    const unit = document.createElement('span');
+    unit.className = 'pp-unit';
+    unit.textContent = 'x';
+
+    const btnPlus = document.createElement('button');
+    btnPlus.className = 'pp-btn pp-btn-plus';
+    btnPlus.textContent = '+';
+    btnPlus.title = '배속 증가 (+0.1)';
+
+    overlay.append(btnMinus, input, unit, btnPlus);
+    document.body.appendChild(overlay);
+
+    // 버튼 이벤트 — 오버레이 클릭이 플레이어에 전달되지 않도록 전파 차단
+    btnMinus.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const current = clampSpeed(input.value);
+      const next = clampSpeed(current - 0.1);
+      setSpeed(next);
+    });
+
+    btnPlus.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const current = clampSpeed(input.value);
+      const next = clampSpeed(current + 0.1);
+      setSpeed(next);
+    });
+
+    // 직접 입력: Enter 또는 포커스 아웃 시 적용
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.stopPropagation();
+        setSpeed(input.value);
+        input.blur();
+      }
+      e.stopPropagation(); // 키 이벤트가 플레이어에 전달되지 않도록 차단
+    });
+
+    input.addEventListener('blur', () => {
+      setSpeed(input.value);
+    });
+
+    input.addEventListener('click', (e) => e.stopPropagation());
+
+    // 위치 설정 및 추적
+    positionOverlay(video, overlay);
+    watchVideoPosition(video, overlay);
+
+    return overlay;
+  }
+
+  // 오버레이를 video의 우상단에 fixed 위치로 배치
+  function positionOverlay(video, overlay) {
+    const rect = video.getBoundingClientRect();
+
+    // 동영상이 화면 밖이거나 숨겨진 경우 오버레이 숨김
+    if (rect.width === 0 || rect.height === 0) {
+      overlay.classList.add('pp-overlay--hidden');
+      return;
+    }
+
+    overlay.classList.remove('pp-overlay--hidden');
+    overlay.style.top = `${rect.top + OVERLAY_MARGIN}px`;
+    overlay.style.right = `${window.innerWidth - rect.right + OVERLAY_MARGIN}px`;
+    overlay.style.left = 'auto';
+  }
+
+  // ResizeObserver + scroll 이벤트로 오버레이 위치를 동영상에 고정
+  function watchVideoPosition(video, overlay) {
+    const resizeObserver = new ResizeObserver(() => {
+      positionOverlay(video, overlay);
+    });
+    resizeObserver.observe(video);
+
+    const onScroll = () => positionOverlay(video, overlay);
+    window.addEventListener('scroll', onScroll, { passive: true });
+
+    // 전체화면 전환 시 재배치
+    document.addEventListener('fullscreenchange', () => {
+      // 전체화면 진입/종료 후 레이아웃이 안정되면 재계산
+      setTimeout(() => positionOverlay(video, overlay), 150);
+    });
+
+    // video가 DOM에서 제거되면 오버레이도 제거
+    const removalObserver = new MutationObserver(() => {
+      if (!document.contains(video)) {
+        overlay.remove();
+        resizeObserver.disconnect();
+        removalObserver.disconnect();
+        window.removeEventListener('scroll', onScroll);
+      }
+    });
+    removalObserver.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+    });
+  }
+
+  // 모든 오버레이의 속도 표시 업데이트
+  function updateAllOverlays(speed) {
+    document.querySelectorAll('[data-pp-overlay] .pp-speed-input').forEach((input) => {
+      if (document.activeElement !== input) {
+        input.value = speed.toFixed(1);
+      }
+    });
+  }
+
+  // ── 8. MutationObserver — 동적 video 요소 감지 ───────────────────────────
   const processedVideos = new WeakSet();
 
   function applySpeedToVideo(video) {
     if (processedVideos.has(video)) return;
     processedVideos.add(video);
 
-    // 저장된 배속을 불러와 해당 video에 즉시 적용
     loadSpeedForCurrentSite().then((savedSpeed) => {
       if (savedSpeed !== 1.0) {
         sendSpeedToPageContext(savedSpeed);
       }
+
+      // 오버레이 생성 (video당 1개)
+      if (!videoOverlayMap.has(video)) {
+        const overlay = createOverlay(video);
+        videoOverlayMap.set(video, overlay);
+        const input = overlay.querySelector('.pp-speed-input');
+        if (input) input.value = savedSpeed.toFixed(1);
+      }
     });
   }
 
-  // 노드 및 하위 트리에서 video 요소를 찾아 처리
   function findAndApplyToVideos(root) {
     if (root.nodeName === 'VIDEO') {
       applySpeedToVideo(root);
@@ -117,19 +242,17 @@
     subtree: true,
   });
 
-  // 페이지 언로드 시 Observer 정리 (메모리 누수 방지)
   window.addEventListener('unload', () => {
     videoObserver.disconnect();
+    document.querySelectorAll('[data-pp-overlay]').forEach((el) => el.remove());
   });
 
-  // 이미 존재하는 video 요소에 즉시 적용 (Observer 등록 이전에 렌더링된 video 커버)
   document.querySelectorAll('video').forEach(applySpeedToVideo);
 
-  // ── 8. popup / overlay에서 오는 메시지 수신 ──────────────────────────────
+  // ── 9. popup에서 오는 메시지 수신 ────────────────────────────────────────
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === 'SET_SPEED') {
       const applied = setSpeed(message.speed);
-      // 새로 감지된 video 포함 전체 재적용을 위해 processedVideos 초기화
       document.querySelectorAll('video').forEach((video) => {
         processedVideos.delete(video);
         applySpeedToVideo(video);
@@ -139,7 +262,7 @@
 
     if (message.type === 'GET_SPEED') {
       getSpeed().then((speed) => sendResponse({ success: true, speed }));
-      return true; // 비동기 응답 허용
+      return true;
     }
   });
 })();
