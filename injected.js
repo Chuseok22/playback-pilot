@@ -7,6 +7,10 @@
 
   // content_script와 공유하는 전역 목표 배속
   // content_script에서 window.__targetPlaybackRate 를 설정하면 이쪽에서 읽음
+  // 이미 주입된 경우 재실행 방지 (all_frames:true 환경에서 iframe마다 주입될 수 있음)
+  if (window.__playbackPilotInjected) return;
+  window.__playbackPilotInjected = true;
+
   window.__targetPlaybackRate = window.__targetPlaybackRate ?? 1.0;
 
   // ── 1. HTMLMediaElement.prototype.playbackRate setter 재정의 ──────────────
