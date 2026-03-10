@@ -233,7 +233,9 @@
     subtree: true,
   });
 
-  window.addEventListener('unload', () => {
+  // 'unload'는 Chrome 115+에서 Permissions Policy 대상이 되어
+  // all_frames:true 환경의 일부 iframe에서 차단됨 → 'pagehide'로 교체
+  window.addEventListener('pagehide', () => {
     videoObserver.disconnect();
     document.querySelectorAll('[data-pp-overlay]').forEach((el) => el.remove());
   });
